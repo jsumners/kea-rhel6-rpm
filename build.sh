@@ -1,0 +1,103 @@
+#!/bin/bash
+
+version="1.1.0"
+keaSourceUrl="http://ftp.isc.org/isc/kea/${version}/kea-${version}.tar.gz"
+pgVersion="9.6" # can be 9.5, 9.6, or any 9.x version from PostgreSQL's RPM repos
+
+which wget > /dev/null
+if [ $? -ne 0 ]; then
+  echo "Aborting. Cannot continue without wget."
+  exit 1
+fi
+
+which rpmbuild > /dev/null
+if [ $? -ne 0 ]; then
+  echo "Aborting. Cannot continue without rpmbuild. Please install the rpmdevtools package."
+  exit 1
+fi
+
+# Let's get down to business
+TOPDIR=$(pwd)
+
+if [ -e rpmbuild ]; then
+  rm -rf rpmbuild/* 2>&1 > /dev/null
+fi
+
+echo "Verifying dependencies..."
+deps=(
+  'autoconf'
+  'automake'
+  'libtool'
+  'boost-devel'
+  'openssl-devel'
+  'mysql-devel'
+  "postgresql${pgVersion/./}-devel"
+  'log4cplus-devel'
+  'valgrind-devel'
+  'gtest-devel'
+  'devtoolset-4-gcc'
+  'devtoolset-4-gcc-c++'
+)
+missingDeps=false
+depsToInstall=""
+for d in "${deps[@]}"; do
+  rpm -qi ${d} 2>&1 1>/dev/null
+  depInstalled=$?
+  if [ ${depInstalled} -eq 1 ]; then
+    providesList=$(rpm -q --whatprovides ${d})
+    if [ "$providesList" != "" ]; then
+      depInstalled=0
+      for p in ${providesList}; do
+        rpm -qi ${p} 2>&1 1>/dev/null
+        i=$?
+        depInstalled=$((depInstalled + i))
+      done
+    fi
+
+    if [ $depInstalled -gt 0 ]; then
+      missingDeps=true
+      echo "Missing dependency: ${d}"
+      depsToInstall="${depsToInstall} ${d}"
+    fi
+  fi
+done
+
+if [ "${missingDeps}" == "true" ]; then
+  echo "Can't continue until all dependencies are installed!"
+  echo -e "Issue: \`yum install ${depsToInstall}\`"
+  exit 1
+fi
+
+source /opt/rh/devtoolset-4/enable
+
+echo "Creating RPM build path structure..."
+mkdir -p rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS,tmp}
+
+echo "Getting source and preparing it..."
+cd ${TOPDIR}/rpmbuild/SOURCES/
+wget ${keaSourceUrl}
+
+cp ${TOPDIR}/files/*.conf.disabled ${TOPDIR}/rpmbuild/SOURCES/
+cp ${TOPDIR}/files/kea.spec ${TOPDIR}/rpmbuild/SPECS/
+sed -i 's/~pgVersion~/'${pgVersion}'/' ${TOPDIR}/rpmbuild/SPECS/kea.spec
+
+cd ${TOPDIR}/rpmbuild/
+
+if [ -f ${TOPDIR}/gpg-env ]; then
+  echo "Building signed Kea RPM ..."
+  source ${TOPDIR}/gpg-env
+
+  if [ "${gpg_bin}" != "" ]; then
+    rpmbuild --define "_topdir ${TOPDIR}/rpmbuild" --define "_signature ${signature}" \
+      --define "_gpg_path ${gpg_path}" --define "_gpg_name ${gpg_name}" \
+      --define "__gpg ${gpg_bin}" --sign -ba "SPECS/kea.spec"
+  else
+    rpmbuild --define "_topdir ${TOPDIR}/rpmbuild" --define "_signature ${signature}" \
+      --define "_gpg_path ${gpg_path}" --define "_gpg_name ${gpg_name}" \
+      --sign -ba "SPECS/kea.spec"
+  fi
+else
+  echo "Building Kea RPM ..."
+  rpmbuild --define "_topdir ${TOPDIR}/rpmbuild" -ba "SPECS/kea.spec"
+fi
+

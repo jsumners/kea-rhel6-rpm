@@ -1,0 +1,4 @@
+rpmbuild/
+package/
+staticdhcpd/
+gpg-env

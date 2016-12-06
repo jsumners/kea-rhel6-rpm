@@ -1,0 +1,5 @@
+description "Kea DCHPv6 Server"
+start on runlevel [2345]
+stop on runlevel [^2345]
+respawn
+exect /usr/sbin/kea-dhcp6 -c /etc/kea/kea.conf
